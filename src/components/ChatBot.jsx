@@ -394,7 +394,6 @@ const ChatBot = ({ onLogout, user, isAuthenticated, isGuest, onNavigate }) => {
   const [, _setPendingAnswerMessage] = useState(false); // Waiting for user to generate answer
   const [pendingAnswerMessage, _setPendingAnswerMessageContent] = useState(null); // Message pending answer generation
   const [messageFeedback, setMessageFeedback] = useState({}); // Track like/dislike feedback for messages: { messageId: 'like'|'dislike'|null }
-  const [isTtsMuted, setIsTtsMuted] = useState(true); // Mute TTS globally (default OFF to save tokens)
   const [playingMessageId, setPlayingMessageId] = useState(null); // Currently playing TTS message ID
   const [ttsLoading, setTtsLoading] = useState(null); // Message ID currently generating TTS
   const textareaElementRef = useRef(null);
@@ -1737,13 +1736,9 @@ const ChatBot = ({ onLogout, user, isAuthenticated, isGuest, onNavigate }) => {
         return;
       }
 
-      // If TTS muted, show alert
-      if (isTtsMuted) {
-        showAlert(userLanguage === 'id' ? 'TTS dimatikan' : 'TTS is muted', 'info', 2000);
-        return;
-      }
-
       // Stop any currently playing audio
+      // (no global mute -- TTS is always enabled)
+
       if (playingMessageId) {
         tokenMixTtsService.stop();
       }
@@ -1772,27 +1767,34 @@ const ChatBot = ({ onLogout, user, isAuthenticated, isGuest, onNavigate }) => {
     }
   };
 
-  /**
-   * Handle toggle mute TTS
-   */
-  const handleToggleTtsMute = () => {
-    const newMutedState = !isTtsMuted;
-    setIsTtsMuted(newMutedState);
-    
-    // Stop current audio if muting
-    if (newMutedState) {
+  // Stop TTS playback immediately for a message (used for double-click)
+  const handleTtsStop = (message) => {
+    try {
       tokenMixTtsService.stop();
       setPlayingMessageId(null);
+      setTtsLoading(null);
+      showAlert(userLanguage === 'id' ? 'Pemutaran dihentikan' : 'Playback stopped', 'info', 1200);
+    } catch (err) {
+      console.error('[ChatBot] Stop TTS error:', err);
     }
-    
-    showAlert(
-      newMutedState 
-        ? (userLanguage === 'id' ? 'Suara dimatikan' : 'TTS muted')
-        : (userLanguage === 'id' ? 'Suara diaktifkan' : 'TTS unmuted'),
-      'success',
-      1500
-    );
   };
+
+  // No global TTS mute: TTS will play only when user requests it (no auto-play).
+
+  const lastBotMessageRef = useRef(null);
+
+  // Keep a reference to the most recent finished bot message for replay
+  useEffect(() => {
+    if (!messages || messages.length === 0) return;
+    // find last non-streaming bot message
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.sender === 'bot' && !m.isStreaming) {
+        lastBotMessageRef.current = m;
+        break;
+      }
+    }
+  }, [messages]);
 
   // Handle stop streaming
   const handleStopStreaming = () => {
@@ -3898,7 +3900,7 @@ Pastikan selalu gunakan tags <reasoning></reasoning> yang tepat.`;
               </div>
             ) : null;
           })()}
-          {message.sender === 'bot' && !message.isStreaming && isLastMessage && (
+          {message.sender === 'bot' && !message.isStreaming && (
             <div className="message-footer">
               <div className="message-actions">
                 <button
@@ -3925,6 +3927,7 @@ Pastikan selalu gunakan tags <reasoning></reasoning> yang tepat.`;
                 <button
                   className={`feedback-btn tts-btn ${playingMessageId === message.id ? 'playing' : ''} ${ttsLoading === message.id ? 'loading' : ''}`}
                   onClick={() => handleTtsToggle(message)}
+                  onDoubleClick={() => handleTtsStop(message)}
                   disabled={ttsLoading === message.id}
                   title={userLanguage === 'id'
                     ? (playingMessageId === message.id ? 'Hentikan suara' : 'Baca suara')
@@ -4116,15 +4119,7 @@ Pastikan selalu gunakan tags <reasoning></reasoning> yang tepat.`;
                 <div className="account-info">
                   <span className="account-label">{userLanguage === 'id' ? 'Akun:' : 'Account:'}</span>
                   <span className="account-name">
-                    {(() => {
-                      const email = user.email || user.name;
-                      // Normalize email display: ensure @deepmail.com for consistency
-                      if (email && email.includes('@')) {
-                        const [local] = email.split('@');
-                        return `${local}@deepmail.com`;
-                      }
-                      return email || (userLanguage === 'id' ? 'Pengguna' : 'User');
-                    })()}
+                    {user.email || user.name || (userLanguage === 'id' ? 'Pengguna' : 'User')}
                   </span>
                 </div>
               )}
@@ -4610,13 +4605,19 @@ Pastikan selalu gunakan tags <reasoning></reasoning> yang tepat.`;
           <button
             className="floating-menu-item"
             onClick={() => {
-              handleToggleTtsMute();
+              // Play last bot message if available
+              if (lastBotMessageRef.current) {
+                handleTtsToggle(lastBotMessageRef.current);
+              } else {
+                showAlert(userLanguage === 'id' ? 'Tidak ada pesan terakhir untuk diputar' : 'No last message to play', 'info', 1500);
+              }
               setShowFloatingMenu(false);
             }}
-            title={userLanguage === 'id' ? (isTtsMuted ? 'Nyalakan TTS' : 'Matikan TTS') : (isTtsMuted ? 'Enable TTS' : 'Disable TTS')}
+            title={userLanguage === 'id' ? 'Putar Terakhir' : 'Play Last'}
           >
-            {isTtsMuted ? '🔇' : '🔊'} {userLanguage === 'id' ? (isTtsMuted ? 'Suara (Muted)' : 'Suara (On)') : (isTtsMuted ? 'Voice (Muted)' : 'Voice (On)')}
+            🔁 {userLanguage === 'id' ? 'Putar Terakhir' : 'Play Last'}
           </button>
+          {/* Global TTS toggle removed; TTS auto-plays for bot messages */}
           <button
             className="floating-menu-item"
             onClick={() => {
